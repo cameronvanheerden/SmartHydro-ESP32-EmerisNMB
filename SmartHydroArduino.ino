@@ -94,7 +94,36 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool oledAvailable = false;
 bool apCreated = false;
 char macAddressStr[18] = "00:00:00:00:00:00";
-uint8_t oledScreenPage = 0;    // 0 = Live Hydroponic Telemetry, 1 = ESP32 MAC & Network Info
+uint8_t oledScreenPage = 0;    // 0 = Telemetry, 1 = ML Dosing Engine, 2 = ESP32 MAC & Network Info
+
+// ================= SMARTHYDRO LOGO BITMAP (32x36 pixels) =================
+const unsigned char PROGMEM smarthydro_logo_bmp[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00,
+  0x00, 0x00, 0x01, 0xC0, 0x00, 0x00, 0x00, 0x03,
+  0x60, 0x00, 0x00, 0x00, 0x02, 0x20, 0x00, 0x00,
+  0x00, 0x06, 0x30, 0x00, 0x00, 0x00, 0x0C, 0x18,
+  0x00, 0x00, 0x00, 0x18, 0x0C, 0x00, 0x00, 0x00,
+  0x30, 0x06, 0x00, 0x00, 0x00, 0x21, 0xC2, 0x00,
+  0x00, 0x00, 0x61, 0xC3, 0x00, 0x00, 0x00, 0xC4,
+  0x91, 0x80, 0x00, 0x01, 0x8F, 0xF8, 0x80, 0x00,
+  0x01, 0x89, 0xD8, 0xC0, 0x00, 0x03, 0x07, 0xF0,
+  0x60, 0x00, 0x03, 0x03, 0xE0, 0x60, 0x00, 0x02,
+  0x00, 0x80, 0x20, 0x00, 0x06, 0x0E, 0xB8, 0x30,
+  0x00, 0x06, 0x09, 0xC8, 0x30, 0x00, 0x06, 0x05,
+  0xD0, 0x30, 0x00, 0x06, 0x03, 0xE0, 0x30, 0x00,
+  0x06, 0x00, 0x80, 0x30, 0x00, 0x06, 0x0E, 0xB8,
+  0x30, 0x00, 0x02, 0x0B, 0xE8, 0x20, 0x00, 0x03,
+  0x0D, 0xD8, 0x60, 0x00, 0x01, 0x07, 0xF0, 0x40,
+  0x00, 0x01, 0x80, 0x80, 0xC0, 0x00, 0x00, 0xDF,
+  0x81, 0x80, 0x00, 0x00, 0x7F, 0xFF, 0x00, 0x00,
+  0x00, 0x3F, 0xFE, 0x00, 0x00, 0x00, 0x0F, 0xF8,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+};
+#define LOGO_WIDTH 32
+#define LOGO_HEIGHT 36
 
 // ================= HTTP REST SERVER =================
 WiFiServer server(80);
@@ -200,6 +229,7 @@ bool disableEC(void *argument = nullptr);
 void updateOLEDDisplay();
 void retrieveMacAddress();
 void initOLED();
+void showSplashScreen();
 bool initAccessPoint();
 bool growLightOn(void *argument = nullptr);   // Turns grow light ON (LOW), schedules turn-off after 8 hours
 bool growLightOff(void *argument = nullptr);  // Turns grow light OFF (HIGH), schedules turn-on after 16 hours
@@ -216,6 +246,49 @@ int analogReadAvg(int pin, uint8_t samples = 10) {
     delayMicroseconds(250); 
   }
   return (int)(sum / samples);
+}
+
+// -------------------------------------------------------------------------------------------------
+// 8-Second Animated SmartHydro Splash Screen with Plant/Droplet Logo & Progress Bar
+// -------------------------------------------------------------------------------------------------
+void showSplashScreen() {
+  if (!oledAvailable) return;
+
+  Serial.println(F("[OLED] Displaying 8-second SmartHydro splash screen..."));
+  const int totalSteps = 20; // 20 steps * 400ms = 8000ms (8.0 seconds)
+
+  for (int step = 1; step <= totalSteps; step++) {
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+
+    // Render Stylized Droplet & Plant Logo on Left
+    display.drawBitmap(6, 4, smarthydro_logo_bmp, LOGO_WIDTH, LOGO_HEIGHT, SSD1306_WHITE);
+
+    // Render Brand Typography on Right
+    display.setTextSize(1);
+    display.setCursor(44, 6);
+    display.print(F("SMART"));
+    display.setCursor(44, 18);
+    display.print(F("HYDRO"));
+    display.setCursor(44, 30);
+    display.print(F("SYSTEM"));
+
+    // Animated Loading Progress Bar at Bottom
+    display.drawRoundRect(4, 45, 120, 7, 2, SSD1306_WHITE);
+    int barWidth = (116 * step) / totalSteps;
+    if (barWidth > 0) {
+      display.fillRoundRect(6, 47, barWidth, 3, 1, SSD1306_WHITE);
+    }
+
+    display.setCursor(14, 55);
+    display.print(F("INITIALIZING ESP32"));
+    if (step % 3 == 0) display.print(F("."));
+    else if (step % 3 == 1) display.print(F(".."));
+    else display.print(F("..."));
+
+    display.display();
+    delay(400); // 400ms per step
+  }
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -246,16 +319,11 @@ void initOLED() {
     if (display.begin(SSD1306_SWITCHCAPVCC, addr)) {
       oledAvailable = true;
       display.dim(false); // Maximum brightness
-      display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
-      display.setCursor(10, 15);
-      display.println(F("SmartHydro System"));
-      display.setCursor(10, 30);
-      display.println(F("Booting Controller..."));
-      display.display();
       Serial.print(F("[OLED] SUCCESS: SSD1306 OLED initialized at address 0x"));
       Serial.println(addr, HEX);
+
+      // Display 8-second graphical SmartHydro boot splash
+      showSplashScreen();
       return;
     }
   }
@@ -357,10 +425,10 @@ void loop() {
     updateOLEDDisplay();
   }
 
-  // 10-Second OLED Screen Page Rotation
+  // 10-Second OLED Screen Page Rotation (Cycles across 3 screens: 0 -> 1 -> 2 -> 0)
   if (now - lastOledPageFlipMs >= OLED_PAGE_INTERVAL) {
     lastOledPageFlipMs = now;
-    oledScreenPage = (oledScreenPage == 0) ? 1 : 0;
+    oledScreenPage = (oledScreenPage + 1) % 3;
     updateOLEDDisplay();
   }
 
@@ -656,7 +724,7 @@ void retrieveMacAddress() {
 }
 
 // -------------------------------------------------------------------------------------------------
-// High-Legibility Dual-Screen OLED Display (Swaps every 10 seconds between Telemetry and Network)
+// High-Legibility 3-Screen OLED Carousel (Swaps every 10s: Telemetry -> ML Engine -> System Info)
 // -------------------------------------------------------------------------------------------------
 void updateOLEDDisplay() {
   if (!oledAvailable) return;
@@ -667,7 +735,6 @@ void updateOLEDDisplay() {
 
   if (oledScreenPage == 0) {
     // ================= SCREEN 1: LIVE HYDROPONIC TELEMETRY =================
-    // Header Banner
     display.setCursor(16, 0);
     display.print(F("[ SMART HYDRO ]"));
     display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
@@ -705,7 +772,7 @@ void updateOLEDDisplay() {
     display.print(F("Pump: "));
     display.print(digitalRead(PUMP_PIN) == LOW ? F("RUN") : F("IDL"));
 
-    // Row 4: Fans
+    // Row 4: Environmental Fans
     display.setCursor(0, 52);
     display.print(F("Fan:   "));
     display.print(digitalRead(FAN_PIN) == LOW ? F("ON ") : F("OFF"));
@@ -714,9 +781,45 @@ void updateOLEDDisplay() {
     display.print(F("Extr: "));
     display.print(digitalRead(EXTRACTOR_PIN) == LOW ? F("ON ") : F("OFF"));
 
+  } else if (oledScreenPage == 1) {
+    // ================= SCREEN 2: ML DOSING ENGINE & TARGETS =================
+    display.setCursor(10, 0);
+    display.print(F("[ ML DOSING ENGINE ]"));
+    display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+
+    // EC Machine Learning Target & Evaluation
+    display.setCursor(0, 13);
+    display.print(F("EC Target: 2.0-3.5mS"));
+
+    display.setCursor(0, 24);
+    display.print(F("EC Status: "));
+    if (ecLevel < 2.0f) {
+      display.print(F("LOW (UP)"));
+    } else if (ecLevel > 3.5f) {
+      display.print(F("HIGH (DN)"));
+    } else {
+      display.print(F("OPTIMAL"));
+    }
+
+    // pH Machine Learning Target & Evaluation
+    display.setCursor(0, 36);
+    display.print(F("pH Target: 5.8-6.3"));
+
+    display.setCursor(0, 47);
+    display.print(F("pH Status: "));
+    if (phLevel < 5.8f) {
+      display.print(F("LOW (UP)"));
+    } else if (phLevel > 6.3f) {
+      display.print(F("HIGH (DN)"));
+    } else {
+      display.print(F("OPTIMAL"));
+    }
+
+    display.drawLine(0, 57, 127, 57, SSD1306_WHITE);
+    display.setCursor(8, 57);
+
   } else {
-    // ================= SCREEN 2: ESP32 NETWORK & MAC ADDRESS =================
-    // Header Banner
+    // ================= SCREEN 3: ESP32 NETWORK & MAC ADDRESS =================
     display.setCursor(16, 0);
     display.print(F("[ SYSTEM INFO ]"));
     display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
