@@ -216,16 +216,6 @@ int analogReadAvg(int pin, uint8_t samples = 10) {
   return (int)(sum / samples);
 }
 
-// ================= SETUP (System Initialization) =================
-void setup() {
-  // Initialize Serial Monitor at standard ESP32 baud rate (115200)
-  Serial.begin(115200);
-  delay(500);
-
-  Serial.println(F("\n=========================================================="));
-  Serial.println(F("  Smart Hydroponics Controller - Native ESP32 Firmware   "));
-  Serial.println(F("=========================================================="));
-
 // -------------------------------------------------------------------------------------------------
 // Initializes OLED Display with Automatic I2C Address Detection (0x3C / 0x3D)
 // -------------------------------------------------------------------------------------------------
