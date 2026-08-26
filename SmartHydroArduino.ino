@@ -94,7 +94,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool oledAvailable = false;
 bool apCreated = false;
 char macAddressStr[18] = "00:00:00:00:00:00";
-uint8_t oledScreenPage = 0;    // 0 = Telemetry, 1 = ML Dosing Engine, 2 = ESP32 MAC & Network Info
+uint8_t oledScreenPage = 0;    // 0 = Live Telemetry, 1 = ESP32 MAC & Network Info
 
 // ================= SMARTHYDRO LOGO BITMAP (32x36 pixels) =================
 const unsigned char PROGMEM smarthydro_logo_bmp[] = {
@@ -441,10 +441,10 @@ void loop() {
     updateOLEDDisplay();
   }
 
-  // 10-Second OLED Screen Page Rotation (Cycles across 3 screens: 0 -> 1 -> 2 -> 0)
+  // 10-Second OLED Screen Page Rotation (Swaps between 2 screens: Telemetry <-> Network)
   if (now - lastOledPageFlipMs >= OLED_PAGE_INTERVAL) {
     lastOledPageFlipMs = now;
-    oledScreenPage = (oledScreenPage + 1) % 3;
+    oledScreenPage = (oledScreenPage == 0) ? 1 : 0;
     updateOLEDDisplay();
   }
 
@@ -742,7 +742,7 @@ void retrieveMacAddress() {
 }
 
 // -------------------------------------------------------------------------------------------------
-// High-Legibility 3-Screen OLED Carousel (Swaps every 10s: Telemetry -> ML Engine -> System Info)
+// Dual-Color (Yellow/Blue) Optimized OLED Dashboard (Swaps every 10s: Telemetry <-> System Info)
 // -------------------------------------------------------------------------------------------------
 void updateOLEDDisplay() {
   if (!oledAvailable) return;
@@ -753,111 +753,78 @@ void updateOLEDDisplay() {
 
   if (oledScreenPage == 0) {
     // ================= SCREEN 1: LIVE HYDROPONIC TELEMETRY =================
-    display.setCursor(16, 0);
+    // Yellow Header Area (y = 0 to 15)
+    display.setCursor(16, 2);
     display.print(F("[ SMART HYDRO ]"));
-    display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+    display.drawLine(0, 13, 127, 13, SSD1306_WHITE);
 
+    // Blue Content Area (y = 16 to 63)
     // Row 1: EC & pH
-    display.setCursor(0, 13);
+    display.setCursor(0, 17);
     display.print(F("EC: "));
     display.print(ecLevel, 2);
     display.print(F("mS"));
 
-    display.setCursor(68, 13);
+    display.setCursor(68, 17);
     display.print(F("pH: "));
     display.print(phLevel, 2);
 
     // Row 2: Temperature & Humidity
-    display.setCursor(0, 25);
+    display.setCursor(0, 28);
     display.print(F("Tmp: "));
     display.print(temperature, 1);
     display.print((char)247);
     display.print(F("C"));
 
-    display.setCursor(68, 25);
+    display.setCursor(68, 28);
     display.print(F("Hum: "));
     display.print((int)humidity);
     display.print(F("%"));
 
-    display.drawLine(0, 36, 127, 36, SSD1306_WHITE);
+    display.drawLine(0, 39, 127, 39, SSD1306_WHITE);
 
     // Row 3: Actuators (Grow Light & Water Pump)
-    display.setCursor(0, 40);
+    display.setCursor(0, 43);
     display.print(F("Light: "));
     display.print(digitalRead(LED_PIN) == LOW ? F("ON ") : F("OFF"));
 
-    display.setCursor(68, 40);
+    display.setCursor(68, 43);
     display.print(F("Pump: "));
     display.print(digitalRead(PUMP_PIN) == LOW ? F("RUN") : F("IDL"));
 
-    // Row 4: Water & Environmental Fan
-    display.setCursor(0, 52);
-    display.print(F("Wtr:  "));
+    // Row 4: Water Level & Environmental Fan
+    display.setCursor(0, 54);
+    display.print(F("Wtr:   "));
     display.print(waterStatus);
 
-    display.setCursor(68, 52);
+    display.setCursor(68, 54);
     display.print(F("Fan:  "));
     display.print(digitalRead(FAN_PIN) == LOW ? F("ON ") : F("OFF"));
 
-  } else if (oledScreenPage == 1) {
-    // ================= SCREEN 2: ML DOSING ENGINE & TARGETS =================
-    display.setCursor(10, 0);
-    display.print(F("[ ML DOSING ENGINE ]"));
-    display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
-
-    // EC Machine Learning Target & Evaluation
-    display.setCursor(0, 13);
-    display.print(F("EC Target: 2.0-3.5mS"));
-
-    display.setCursor(0, 24);
-    display.print(F("EC Status: "));
-    if (ecLevel < 2.0f) {
-      display.print(F("LOW (UP)"));
-    } else if (ecLevel > 3.5f) {
-      display.print(F("HIGH (DN)"));
-    } else {
-      display.print(F("OPTIMAL"));
-    }
-
-    // pH Machine Learning Target & Evaluation
-    display.setCursor(0, 36);
-    display.print(F("pH Target: 5.8-6.3"));
-
-    display.setCursor(0, 47);
-    display.print(F("pH Status: "));
-    if (phLevel < 5.8f) {
-      display.print(F("LOW (UP)"));
-    } else if (phLevel > 6.3f) {
-      display.print(F("HIGH (DN)"));
-    } else {
-      display.print(F("OPTIMAL"));
-    }
-
-    display.drawLine(0, 57, 127, 57, SSD1306_WHITE);
-    display.setCursor(8, 57);
-
   } else {
-    // ================= SCREEN 3: ESP32 NETWORK & MAC ADDRESS =================
-    display.setCursor(16, 0);
+    // ================= SCREEN 2: ESP32 NETWORK & MAC ADDRESS =================
+    // Yellow Header Area (y = 0 to 15)
+    display.setCursor(16, 2);
     display.print(F("[ SYSTEM INFO ]"));
-    display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+    display.drawLine(0, 13, 127, 13, SSD1306_WHITE);
 
+    // Blue Content Area (y = 16 to 63)
     // Section 1: MAC Address Title & Centered String
-    display.setCursor(0, 13);
+    display.setCursor(0, 18);
     display.print(F("MAC Address:"));
 
-    display.setCursor(13, 24);
+    display.setCursor(13, 29);
     display.print(macAddressStr);
 
-    display.drawLine(0, 35, 127, 35, SSD1306_WHITE);
+    display.drawLine(0, 40, 127, 40, SSD1306_WHITE);
 
     // Section 2: WiFi SoftAP & Static IP
-    display.setCursor(0, 40);
+    display.setCursor(0, 44);
     display.print(F("AP: "));
     display.print(ssid);
     display.print(apCreated ? F(" [OK]") : F(" [ERR]"));
 
-    display.setCursor(0, 52);
+    display.setCursor(0, 54);
     display.print(F("IP: 192.168.8.14:80"));
   }
 
