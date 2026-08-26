@@ -145,7 +145,7 @@ DHT dht(DHT_PIN, DHTTYPE);
 
 // ================= TIMING CONSTANTS (Milliseconds) =================
 const unsigned long SIXTEEN_HR            = 57600000UL;// 16 hours (nutrient & pH dosing interval)
-const unsigned long PUMP_INTERVAL         = 5000UL;    // 5-second dosing pulse duration
+const unsigned long PUMP_INTERVAL         = 7000UL;    // 7-second peristaltic dosing pulse duration (5-10s safe window)
 const unsigned long QUARTER_HR            = 900000UL;  // 15 minutes water pump ON
 const unsigned long FORTY_FIVE_MIN        = 2700000UL; // 45 minutes water pump OFF
 
@@ -300,6 +300,10 @@ void setup() {
     digitalWrite(relayPins[i], HIGH); // Set HIGH (OFF)
     pinMode(relayPins[i], OUTPUT);    // Set as output
   }
+
+  // Force all dosing pumps OFF at startup (Active-LOW: HIGH = OFF)
+  disablePH();
+  disableEC();
 
   // Turn ON default active environmental appliances (Active LOW: LOW = ON)
   togglePin(FAN_PIN, LOW);
@@ -868,11 +872,13 @@ void estimateFactors() {
 bool disablePH(void *argument) {
   digitalWrite(PH_UP_PIN, HIGH);
   digitalWrite(PH_DOWN_PIN, HIGH);
+  Serial.println(F("[Dosing] pH Pump pulse finished -> pH Pumps OFF (Relays HIGH)"));
   return false; // Complete one-shot
 }
 
 bool disableEC(void *argument) {
   digitalWrite(EC_UP_PIN, HIGH);
   digitalWrite(EC_DOWN_PIN, HIGH);
+  Serial.println(F("[Dosing] Nutrient Pump pulse finished -> EC Pumps OFF (Relays HIGH)"));
   return false; // Complete one-shot
 }
