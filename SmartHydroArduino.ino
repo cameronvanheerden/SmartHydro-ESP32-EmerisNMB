@@ -212,7 +212,8 @@ unsigned long lastOledPageFlipMs = 0;
 // ================= WATER FLOW SENSOR VARIABLES & INTERRUPT =================
 volatile unsigned long flowPulseCount = 0;
 float waterFlowRateLMin = 0.0f; // Flow rate in Liters per Minute
-String waterFlowStatus = "IDLE"; // 1-Word Status: "FLOW", "IDLE", or "DRY"
+String waterFlowStatus = "IDLE"; // 1-Word Flow State: "FLOW", "IDLE", or "DRY"
+String waterStatus = "Low";      // App Water Card Status: "Low", "Normal", or "Good"
 
 void IRAM_ATTR flowPulseISR() {
   flowPulseCount++;
@@ -441,10 +442,12 @@ void loop() {
       waterFlowRateLMin = (pulses / secondsElapsed) / 7.5f;
     }
 
-    // Determine 1-word status: FLOW (active), DRY (pump running with no flow), IDLE (pump off)
+    // Determine status: "Normal" when flowing, "Low" when dry / no water detected
     if (waterFlowRateLMin > 0.1f || pulses >= 2) {
       waterFlowStatus = "FLOW";
+      waterStatus = "Normal";
     } else {
+      waterStatus = "Low";
       if (digitalRead(PUMP_PIN) == LOW) {
         waterFlowStatus = "DRY"; // Pump energized but no flow detected -> Dry Run Alarm!
       } else {
@@ -456,7 +459,8 @@ void loop() {
     Serial.print(F("[Telemetry] Temp: ")); Serial.print(temperature, 1); Serial.print(F(" C | Hum: ")); Serial.print(humidity, 0);
     Serial.print(F(" % | Light ADC: ")); Serial.print((int)lightLevel);
     Serial.print(F(" | EC: ")); Serial.print(ecLevel, 2); Serial.print(F(" mS/cm | pH: ")); Serial.print(phLevel, 2);
-    Serial.print(F(" | Flow: ")); Serial.println(waterFlowStatus);
+    Serial.print(F(" | Water: ")); Serial.print(waterStatus);
+    Serial.print(F(" (")); Serial.print(waterFlowStatus); Serial.println(F(")"));
 
     // Refresh live OLED dashboard numbers
     updateOLEDDisplay();
@@ -492,6 +496,8 @@ void loop() {
             "\",\n  \"EC\": \"" + String(ecLevel, 2) +
             "\",\n  \"Humidity\": \"" + String(humidity, 1) +
             "\",\n  \"Temperature\": \"" + String(temperature, 1) +
+            "\",\n  \"Water\": \"" + waterStatus +
+            "\",\n  \"WaterLevel\": \"" + waterStatus +
             "\",\n  \"WaterFlow\": \"" + waterFlowStatus +
             "\"\n}";
           sendHttpResponse(client, message);
@@ -542,6 +548,7 @@ void loop() {
             "\",\n  \"WaterPump\": \"" + String(!digitalRead(PUMP_PIN)) +
             "\",\n  \"Exctractor\": \"" + String(!digitalRead(EXTRACTOR_PIN)) +
             "\",\n  \"Fan\": \"" + String(!digitalRead(FAN_PIN)) +
+            "\",\n  \"Water\": \"" + waterStatus +
             "\",\n  \"WaterFlow\": \"" + waterFlowStatus +
             "\"\n}";
           sendHttpResponse(client, message);
@@ -811,10 +818,10 @@ void updateOLEDDisplay() {
     display.print(F("Pump: "));
     display.print(digitalRead(PUMP_PIN) == LOW ? F("RUN") : F("IDL"));
 
-    // Row 4: Water Flow & Environmental Fan
+    // Row 4: Water & Environmental Fan
     display.setCursor(0, 52);
-    display.print(F("Flow:  "));
-    display.print(waterFlowStatus);
+    display.print(F("Wtr:  "));
+    display.print(waterStatus);
 
     display.setCursor(68, 52);
     display.print(F("Fan:  "));
