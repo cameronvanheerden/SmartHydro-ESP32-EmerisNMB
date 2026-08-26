@@ -196,6 +196,7 @@ bool disablePH(void *argument = nullptr);
 bool disableEC(void *argument = nullptr);
 void updateOLEDDisplay();
 void retrieveMacAddress();
+void initOLED();
 bool initAccessPoint();
 bool growLightOn(void *argument = nullptr);   // Turns grow light ON (LOW), schedules turn-off after 8 hours
 bool growLightOff(void *argument = nullptr);  // Turns grow light OFF (HIGH), schedules turn-on after 16 hours
@@ -224,23 +225,65 @@ void setup() {
   Serial.println(F("  Smart Hydroponics Controller - Native ESP32 Firmware   "));
   Serial.println(F("=========================================================="));
 
-  // Initialize I2C Bus with custom ESP32 pins (GPIO 26 SDA, GPIO 33 SCL)
+// -------------------------------------------------------------------------------------------------
+// Initializes OLED Display with Automatic I2C Address Detection (0x3C / 0x3D)
+// -------------------------------------------------------------------------------------------------
+void initOLED() {
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+  delay(100);
 
-  // Initialize 0.96" I2C OLED display (SSD1306)
-  if (display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    oledAvailable = true;
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(10, 15);
-    display.println(F("SmartHydro System"));
-    display.setCursor(10, 30);
-    display.println(F("Booting Controller..."));
-    display.display();
-  } else {
-    Serial.println(F("[OLED] Warning: SSD1306 OLED not detected. Check I2C wiring (SDA->26, SCL->33)."));
+  Serial.println(F("\n[I2C] Scanning I2C bus on SDA (GPIO 26) & SCL (GPIO 33)..."));
+  uint8_t detectedAddress = 0;
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.print(F("[I2C] Found device at address 0x"));
+      if (addr < 16) Serial.print('0');
+      Serial.println(addr, HEX);
+      if (addr == 0x3C || addr == 0x3D) {
+        detectedAddress = addr;
+      }
+    }
   }
+
+  // Try detected address first, or fallback to trying 0x3C then 0x3D
+  uint8_t targetAddresses[] = { (detectedAddress != 0) ? detectedAddress : (uint8_t)0x3C, (uint8_t)0x3D };
+  for (uint8_t i = 0; i < 2; i++) {
+    uint8_t addr = targetAddresses[i];
+    if (display.begin(SSD1306_SWITCHCAPVCC, addr)) {
+      oledAvailable = true;
+      display.dim(false); // Maximum brightness
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(10, 15);
+      display.println(F("SmartHydro System"));
+      display.setCursor(10, 30);
+      display.println(F("Booting Controller..."));
+      display.display();
+      Serial.print(F("[OLED] SUCCESS: SSD1306 OLED initialized at address 0x"));
+      Serial.println(addr, HEX);
+      return;
+    }
+  }
+
+  Serial.println(F("[OLED] Warning: SSD1306 OLED not responding. Check:"));
+  Serial.println(F("  1. VCC connected to 3.3V (or 5V) and GND connected to common GND."));
+  Serial.println(F("  2. SDA connected to GPIO 26, SCL connected to GPIO 33 (try swapping them if unsure)."));
+}
+
+// ================= SETUP (System Initialization) =================
+void setup() {
+  // Initialize Serial Monitor at standard ESP32 baud rate (115200)
+  Serial.begin(115200);
+  delay(500);
+
+  Serial.println(F("\n=========================================================="));
+  Serial.println(F("  Smart Hydroponics Controller - Native ESP32 Firmware   "));
+  Serial.println(F("=========================================================="));
+
+  // Initialize OLED display with auto address detection
+  initOLED();
 
   // Initialize WiFi SoftAP Access Point with verification retry loop
   initAccessPoint();
