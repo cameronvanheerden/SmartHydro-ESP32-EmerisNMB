@@ -157,7 +157,7 @@ struct RequestBuffer {
 // Digital Sensor Pins
 #define DHTTYPE DHT11
 #define DHT_PIN       27       // Digital GPIO 27 for DHT11 data bus
-#define FLOW_PIN      14       // Digital GPIO 14 for Water Flow Pulse Sensor (Interrupt capable)
+#define WATER_PIN     14       // Digital GPIO 14 for Resistive Water Level Sensor (S pin)
 
 // 230V Appliance Relays (Active LOW: LOW = Relay Energized / ON, HIGH = OFF)
 #define LED_PIN       16       // 230V Relay IN1 — Grow Light
@@ -209,15 +209,8 @@ unsigned long lastSensorReadMs = 0;
 unsigned long lastDhtReadMs = 0;
 unsigned long lastOledPageFlipMs = 0;
 
-// ================= WATER FLOW SENSOR VARIABLES & INTERRUPT =================
-volatile unsigned long flowPulseCount = 0;
-float waterFlowRateLMin = 0.0f; // Flow rate in Liters per Minute
-String waterFlowStatus = "IDLE"; // 1-Word Flow State: "FLOW", "IDLE", or "DRY"
-String waterStatus = "Low";      // App Water Card Status: "Low", "Normal", or "Good"
-
-void IRAM_ATTR flowPulseISR() {
-  flowPulseCount++;
-}
+// ================= WATER LEVEL SENSOR VARIABLES =================
+String waterStatus = "Low";    // 1-Word App Status: "Low" or "Normal"
 
 // ================= FUNCTION DECLARATIONS =================
 void togglePin(int pin);
@@ -366,9 +359,8 @@ void setup() {
   // Configure ESP32 ADC for 12-bit resolution (0 to 4095)
   analogReadResolution(12);
 
-  // Configure Water Flow Sensor interrupt on GPIO 14
-  pinMode(FLOW_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(FLOW_PIN), flowPulseISR, RISING);
+  // Configure Resistive Water Level Sensor on GPIO 14
+  pinMode(WATER_PIN, INPUT);
 
   // Safe Relay Initialization (Active-LOW: Set HIGH before OUTPUT to prevent startup relay clicks)
   const int relayPins[] = { LED_PIN, FAN_PIN, PUMP_PIN, EXTRACTOR_PIN, PH_UP_PIN, PH_DOWN_PIN, EC_UP_PIN, EC_DOWN_PIN };
@@ -431,36 +423,19 @@ void loop() {
     ecLevel    = getEC();       // TDS sensor → mS/cm conversion
     phLevel    = getPH();
 
-    // Water Flow Pulse Calculation (F = 7.5 * Q for standard YF-S201/S401 turbine flow sensors)
-    noInterrupts();
-    unsigned long pulses = flowPulseCount;
-    flowPulseCount = 0;
-    interrupts();
-
-    float secondsElapsed = (now - lastSensorReadMs) / 1000.0f;
-    if (secondsElapsed > 0.0f) {
-      waterFlowRateLMin = (pulses / secondsElapsed) / 7.5f;
-    }
-
-    // Determine status: "Normal" when flowing, "Low" when dry / no water detected
-    if (waterFlowRateLMin > 0.1f || pulses >= 2) {
-      waterFlowStatus = "FLOW";
+    // Read Resistive Water Level Sensor (HIGH = Submerged in water, LOW = Dry / Below sensor)
+    int waterRead = digitalRead(WATER_PIN);
+    if (waterRead == HIGH) {
       waterStatus = "Normal";
     } else {
       waterStatus = "Low";
-      if (digitalRead(PUMP_PIN) == LOW) {
-        waterFlowStatus = "DRY"; // Pump energized but no flow detected -> Dry Run Alarm!
-      } else {
-        waterFlowStatus = "IDLE"; // Pump idle
-      }
     }
 
     // Print real-time sensor diagnostics to Serial Monitor
     Serial.print(F("[Telemetry] Temp: ")); Serial.print(temperature, 1); Serial.print(F(" C | Hum: ")); Serial.print(humidity, 0);
     Serial.print(F(" % | Light ADC: ")); Serial.print((int)lightLevel);
     Serial.print(F(" | EC: ")); Serial.print(ecLevel, 2); Serial.print(F(" mS/cm | pH: ")); Serial.print(phLevel, 2);
-    Serial.print(F(" | Water: ")); Serial.print(waterStatus);
-    Serial.print(F(" (")); Serial.print(waterFlowStatus); Serial.println(F(")"));
+    Serial.print(F(" | Water: ")); Serial.println(waterStatus);
 
     // Refresh live OLED dashboard numbers
     updateOLEDDisplay();
@@ -489,7 +464,7 @@ void loop() {
         // Check for end of HTTP Request Headers
         if (buf.endsWith("\r\n\r\n")) {
           // Serve JSON telemetry containing all calibrated sensor values
-          // EC reported in mS/cm (derived from TDS sensor via 500-scale conversion)
+          // Clean, unified JSON structure with single 'Water' attribute for mobile app
           message =
             "{\n  \"PH\": \"" + String(phLevel, 2) +
             "\",\n  \"Light\": \"" + String((int)lightLevel) +
@@ -497,8 +472,6 @@ void loop() {
             "\",\n  \"Humidity\": \"" + String(humidity, 1) +
             "\",\n  \"Temperature\": \"" + String(temperature, 1) +
             "\",\n  \"Water\": \"" + waterStatus +
-            "\",\n  \"WaterLevel\": \"" + waterStatus +
-            "\",\n  \"WaterFlow\": \"" + waterFlowStatus +
             "\"\n}";
           sendHttpResponse(client, message);
           break;
@@ -549,7 +522,6 @@ void loop() {
             "\",\n  \"Exctractor\": \"" + String(!digitalRead(EXTRACTOR_PIN)) +
             "\",\n  \"Fan\": \"" + String(!digitalRead(FAN_PIN)) +
             "\",\n  \"Water\": \"" + waterStatus +
-            "\",\n  \"WaterFlow\": \"" + waterFlowStatus +
             "\"\n}";
           sendHttpResponse(client, message);
           break;
