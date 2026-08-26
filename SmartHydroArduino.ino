@@ -308,6 +308,11 @@ void loop() {
     ecLevel    = getEC();       // TDS sensor → mS/cm conversion
     phLevel    = getPH();
 
+    // Print real-time sensor diagnostics to Serial Monitor
+    Serial.print(F("[Telemetry] Temp: ")); Serial.print(temperature, 1); Serial.print(F(" C | Hum: ")); Serial.print(humidity, 0);
+    Serial.print(F(" % | Light ADC: ")); Serial.print((int)lightLevel);
+    Serial.print(F(" | EC: ")); Serial.print(ecLevel, 2); Serial.print(F(" mS/cm | pH: ")); Serial.println(phLevel, 2);
+
     // Refresh live OLED dashboard
     updateOLEDDisplay();
   }
