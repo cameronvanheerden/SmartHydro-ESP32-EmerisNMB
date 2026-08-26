@@ -94,6 +94,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool oledAvailable = false;
 bool apCreated = false;
 char macAddressStr[18] = "00:00:00:00:00:00";
+uint8_t oledScreenPage = 0;    // 0 = Live Hydroponic Telemetry, 1 = ESP32 MAC & Network Info
 
 // ================= HTTP REST SERVER =================
 WiFiServer server(80);
@@ -656,7 +657,7 @@ void retrieveMacAddress() {
 }
 
 // -------------------------------------------------------------------------------------------------
-// Renders Real-time Telemetry Dashboard & MAC Address onto 0.96" I2C OLED Display
+// Alternating Dual-Screen OLED Display (Swaps between Live Telemetry and MAC/Network Info)
 // -------------------------------------------------------------------------------------------------
 void updateOLEDDisplay() {
   if (!oledAvailable) return;
@@ -664,60 +665,79 @@ void updateOLEDDisplay() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
-  // Top Header Banner
-  display.setTextSize(1);
-  display.setCursor(4, 0);
-  display.print(F("SMART HYDRO DASHBOARD"));
-  display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+  if (oledScreenPage == 0) {
+    // ================= SCREEN PAGE 1: LIVE HYDROPONIC TELEMETRY =================
+    // Header Banner
+    display.setTextSize(1);
+    display.setCursor(4, 0);
+    display.print(F("SMART HYDRO TELEMETRY"));
+    display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
 
-  // Line 1: MAC Address Display
-  display.setCursor(0, 12);
-  display.print(F("MAC: "));
-  display.print(macAddressStr);
+    // Line 1: Electrical Conductivity (EC in mS/cm) & pH
+    display.setCursor(0, 14);
+    display.print(F("EC: "));
+    display.print(ecLevel, 2);
+    display.print(F(" mS/cm"));
 
-  // Line 2: WiFi SoftAP & Status Indicator
-  display.setCursor(0, 22);
-  if (apCreated) {
-    display.print(F("AP: "));
-    display.print(ssid);
-    display.print(F(" [OK]"));
+    display.setCursor(0, 26);
+    display.print(F("pH: "));
+    display.print(phLevel, 2);
+
+    // Line 2: Temperature (°C) & Humidity (%)
+    display.setCursor(0, 38);
+    display.print(F("Temp: "));
+    display.print(temperature, 1);
+    display.print((char)247); // Degree symbol
+    display.print(F("C"));
+    display.setCursor(68, 38);
+    display.print(F("Hum: "));
+    display.print((int)humidity);
+    display.print(F("%"));
+
+    display.drawLine(0, 49, 127, 49, SSD1306_WHITE);
+
+    // Line 3: Appliance States (Grow Light & Water Pump)
+    display.setCursor(0, 54);
+    display.print(F("Lgt:"));
+    display.print(digitalRead(LED_PIN) == LOW ? F("ON ") : F("OFF"));
+    display.setCursor(68, 54);
+    display.print(F("Pmp:"));
+    display.print(digitalRead(PUMP_PIN) == LOW ? F("RUN") : F("IDL"));
+
   } else {
+    // ================= SCREEN PAGE 2: ESP32 MAC & NETWORK INFO =================
+    // Header Banner
+    display.setTextSize(1);
+    display.setCursor(8, 0);
+    display.print(F("ESP32 NETWORK INFO"));
+    display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+
+    // MAC Address Title & Formatted String
+    display.setCursor(0, 13);
+    display.print(F("MAC Address:"));
+    display.setCursor(0, 23);
+    display.print(macAddressStr);
+
+    display.drawLine(0, 33, 127, 33, SSD1306_WHITE);
+
+    // SoftAP SSID & Connection Status
+    display.setCursor(0, 36);
     display.print(F("AP: "));
     display.print(ssid);
-    display.print(F(" [FAIL]"));
+    display.print(apCreated ? F(" [OK]") : F(" [ERR]"));
+
+    // Static IP Address & Web Server Port
+    display.setCursor(0, 46);
+    display.print(F("IP: 192.168.8.14"));
+
+    display.setCursor(0, 56);
+    display.print(F("API: Port 80 (REST)"));
   }
 
-  display.drawLine(0, 32, 127, 32, SSD1306_WHITE);
-
-  // Line 3: Live EC (mS/cm) and pH
-  display.setCursor(0, 35);
-  display.print(F("EC: "));
-  display.print(ecLevel, 2);
-  display.print(F("mS"));
-  display.setCursor(68, 35);
-  display.print(F("pH: "));
-  display.print(phLevel, 2);
-
-  // Line 4: Temperature (°C) and Humidity (%)
-  display.setCursor(0, 45);
-  display.print(F("Temp: "));
-  display.print(temperature, 1);
-  display.print((char)247); // Degree symbol
-  display.print(F("C"));
-  display.setCursor(68, 45);
-  display.print(F("Hum: "));
-  display.print((int)humidity);
-  display.print(F("%"));
-
-  // Line 5: Actuator Status (Grow Light & Water Pump)
-  display.setCursor(0, 55);
-  display.print(F("Lgt:"));
-  display.print(digitalRead(LED_PIN) == LOW ? F("ON ") : F("OFF"));
-  display.setCursor(68, 55);
-  display.print(F("Pmp:"));
-  display.print(digitalRead(PUMP_PIN) == LOW ? F("RUN") : F("IDL"));
-
   display.display();
+
+  // Swap to the other screen for the next 3-second refresh cycle
+  oledScreenPage = (oledScreenPage == 0) ? 1 : 0;
 }
 
 // ================= GROW LIGHT & PUMP TIMERS =================
