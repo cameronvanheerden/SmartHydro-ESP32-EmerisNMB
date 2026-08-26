@@ -157,6 +157,7 @@ struct RequestBuffer {
 // Digital Sensor Pins
 #define DHTTYPE DHT11
 #define DHT_PIN       27       // Digital GPIO 27 for DHT11 data bus
+#define FLOW_PIN      14       // Digital GPIO 14 for Water Flow Pulse Sensor (Interrupt capable)
 
 // 230V Appliance Relays (Active LOW: LOW = Relay Energized / ON, HIGH = OFF)
 #define LED_PIN       16       // 230V Relay IN1 — Grow Light
@@ -207,6 +208,15 @@ float lastGoodLight = 500.0f;
 unsigned long lastSensorReadMs = 0;
 unsigned long lastDhtReadMs = 0;
 unsigned long lastOledPageFlipMs = 0;
+
+// ================= WATER FLOW SENSOR VARIABLES & INTERRUPT =================
+volatile unsigned long flowPulseCount = 0;
+float waterFlowRateLMin = 0.0f; // Flow rate in Liters per Minute
+String waterFlowStatus = "IDLE"; // 1-Word Status: "FLOW", "IDLE", or "DRY"
+
+void IRAM_ATTR flowPulseISR() {
+  flowPulseCount++;
+}
 
 // ================= FUNCTION DECLARATIONS =================
 void togglePin(int pin);
@@ -355,6 +365,10 @@ void setup() {
   // Configure ESP32 ADC for 12-bit resolution (0 to 4095)
   analogReadResolution(12);
 
+  // Configure Water Flow Sensor interrupt on GPIO 14
+  pinMode(FLOW_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(FLOW_PIN), flowPulseISR, RISING);
+
   // Safe Relay Initialization (Active-LOW: Set HIGH before OUTPUT to prevent startup relay clicks)
   const int relayPins[] = { LED_PIN, FAN_PIN, PUMP_PIN, EXTRACTOR_PIN, PH_UP_PIN, PH_DOWN_PIN, EC_UP_PIN, EC_DOWN_PIN };
   for (int i = 0; i < 8; i++) {
@@ -416,10 +430,33 @@ void loop() {
     ecLevel    = getEC();       // TDS sensor → mS/cm conversion
     phLevel    = getPH();
 
+    // Water Flow Pulse Calculation (F = 7.5 * Q for standard YF-S201/S401 turbine flow sensors)
+    noInterrupts();
+    unsigned long pulses = flowPulseCount;
+    flowPulseCount = 0;
+    interrupts();
+
+    float secondsElapsed = (now - lastSensorReadMs) / 1000.0f;
+    if (secondsElapsed > 0.0f) {
+      waterFlowRateLMin = (pulses / secondsElapsed) / 7.5f;
+    }
+
+    // Determine 1-word status: FLOW (active), DRY (pump running with no flow), IDLE (pump off)
+    if (waterFlowRateLMin > 0.1f || pulses >= 2) {
+      waterFlowStatus = "FLOW";
+    } else {
+      if (digitalRead(PUMP_PIN) == LOW) {
+        waterFlowStatus = "DRY"; // Pump energized but no flow detected -> Dry Run Alarm!
+      } else {
+        waterFlowStatus = "IDLE"; // Pump idle
+      }
+    }
+
     // Print real-time sensor diagnostics to Serial Monitor
     Serial.print(F("[Telemetry] Temp: ")); Serial.print(temperature, 1); Serial.print(F(" C | Hum: ")); Serial.print(humidity, 0);
     Serial.print(F(" % | Light ADC: ")); Serial.print((int)lightLevel);
-    Serial.print(F(" | EC: ")); Serial.print(ecLevel, 2); Serial.print(F(" mS/cm | pH: ")); Serial.println(phLevel, 2);
+    Serial.print(F(" | EC: ")); Serial.print(ecLevel, 2); Serial.print(F(" mS/cm | pH: ")); Serial.print(phLevel, 2);
+    Serial.print(F(" | Flow: ")); Serial.println(waterFlowStatus);
 
     // Refresh live OLED dashboard numbers
     updateOLEDDisplay();
@@ -455,6 +492,7 @@ void loop() {
             "\",\n  \"EC\": \"" + String(ecLevel, 2) +
             "\",\n  \"Humidity\": \"" + String(humidity, 1) +
             "\",\n  \"Temperature\": \"" + String(temperature, 1) +
+            "\",\n  \"WaterFlow\": \"" + waterFlowStatus +
             "\"\n}";
           sendHttpResponse(client, message);
           break;
@@ -504,6 +542,7 @@ void loop() {
             "\",\n  \"WaterPump\": \"" + String(!digitalRead(PUMP_PIN)) +
             "\",\n  \"Exctractor\": \"" + String(!digitalRead(EXTRACTOR_PIN)) +
             "\",\n  \"Fan\": \"" + String(!digitalRead(FAN_PIN)) +
+            "\",\n  \"WaterFlow\": \"" + waterFlowStatus +
             "\"\n}";
           sendHttpResponse(client, message);
           break;
@@ -772,14 +811,14 @@ void updateOLEDDisplay() {
     display.print(F("Pump: "));
     display.print(digitalRead(PUMP_PIN) == LOW ? F("RUN") : F("IDL"));
 
-    // Row 4: Environmental Fans
+    // Row 4: Water Flow & Environmental Fan
     display.setCursor(0, 52);
-    display.print(F("Fan:   "));
-    display.print(digitalRead(FAN_PIN) == LOW ? F("ON ") : F("OFF"));
+    display.print(F("Flow:  "));
+    display.print(waterFlowStatus);
 
     display.setCursor(68, 52);
-    display.print(F("Extr: "));
-    display.print(digitalRead(EXTRACTOR_PIN) == LOW ? F("ON ") : F("OFF"));
+    display.print(F("Fan:  "));
+    display.print(digitalRead(FAN_PIN) == LOW ? F("ON ") : F("OFF"));
 
   } else if (oledScreenPage == 1) {
     // ================= SCREEN 2: ML DOSING ENGINE & TARGETS =================
