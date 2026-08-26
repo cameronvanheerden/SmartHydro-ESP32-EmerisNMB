@@ -156,6 +156,7 @@ const unsigned long SIXTEEN_HR_LIGHT      = 57600000UL; // 16 hours (grow light 
 
 const unsigned long SENSOR_INTERVAL       = 3000UL;    // 3-second cadence for telemetry acquisition
 const unsigned long DHT_MIN_INTERVAL      = 2000UL;    // 2-second minimum DHT11 sensor read spacing
+const unsigned long OLED_PAGE_INTERVAL     = 10000UL;   // 10-second duration for each OLED dashboard screen
 
 auto timer = timer_create_default();
 
@@ -176,6 +177,7 @@ float lastGoodLight = 500.0f;
 
 unsigned long lastSensorReadMs = 0;
 unsigned long lastDhtReadMs = 0;
+unsigned long lastOledPageFlipMs = 0;
 
 // ================= FUNCTION DECLARATIONS =================
 void togglePin(int pin);
@@ -332,7 +334,7 @@ void loop() {
   WiFiClient client = server.available();
   unsigned long now = millis();
 
-  // Non-blocking paced sensor acquisition
+  // Non-blocking paced sensor acquisition (every 3 seconds)
   if (now - lastSensorReadMs >= SENSOR_INTERVAL) {
     lastSensorReadMs = now;
 
@@ -351,7 +353,14 @@ void loop() {
     Serial.print(F(" % | Light ADC: ")); Serial.print((int)lightLevel);
     Serial.print(F(" | EC: ")); Serial.print(ecLevel, 2); Serial.print(F(" mS/cm | pH: ")); Serial.println(phLevel, 2);
 
-    // Refresh live OLED dashboard
+    // Refresh live OLED dashboard numbers
+    updateOLEDDisplay();
+  }
+
+  // 10-Second OLED Screen Page Rotation
+  if (now - lastOledPageFlipMs >= OLED_PAGE_INTERVAL) {
+    lastOledPageFlipMs = now;
+    oledScreenPage = (oledScreenPage == 0) ? 1 : 0;
     updateOLEDDisplay();
   }
 
@@ -647,87 +656,91 @@ void retrieveMacAddress() {
 }
 
 // -------------------------------------------------------------------------------------------------
-// Alternating Dual-Screen OLED Display (Swaps between Live Telemetry and MAC/Network Info)
+// High-Legibility Dual-Screen OLED Display (Swaps every 10 seconds between Telemetry and Network)
 // -------------------------------------------------------------------------------------------------
 void updateOLEDDisplay() {
   if (!oledAvailable) return;
 
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
 
   if (oledScreenPage == 0) {
-    // ================= SCREEN PAGE 1: LIVE HYDROPONIC TELEMETRY =================
+    // ================= SCREEN 1: LIVE HYDROPONIC TELEMETRY =================
     // Header Banner
-    display.setTextSize(1);
-    display.setCursor(4, 0);
-    display.print(F("SMART HYDRO TELEMETRY"));
+    display.setCursor(16, 0);
+    display.print(F("[ SMART HYDRO ]"));
     display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
 
-    // Line 1: Electrical Conductivity (EC in mS/cm) & pH
-    display.setCursor(0, 14);
+    // Row 1: EC & pH
+    display.setCursor(0, 13);
     display.print(F("EC: "));
     display.print(ecLevel, 2);
-    display.print(F(" mS/cm"));
+    display.print(F("mS"));
 
-    display.setCursor(0, 26);
+    display.setCursor(68, 13);
     display.print(F("pH: "));
     display.print(phLevel, 2);
 
-    // Line 2: Temperature (°C) & Humidity (%)
-    display.setCursor(0, 38);
-    display.print(F("Temp: "));
+    // Row 2: Temperature & Humidity
+    display.setCursor(0, 25);
+    display.print(F("Tmp: "));
     display.print(temperature, 1);
-    display.print((char)247); // Degree symbol
+    display.print((char)247);
     display.print(F("C"));
-    display.setCursor(68, 38);
+
+    display.setCursor(68, 25);
     display.print(F("Hum: "));
     display.print((int)humidity);
     display.print(F("%"));
 
-    display.drawLine(0, 49, 127, 49, SSD1306_WHITE);
+    display.drawLine(0, 36, 127, 36, SSD1306_WHITE);
 
-    // Line 3: Appliance States (Grow Light & Water Pump)
-    display.setCursor(0, 54);
-    display.print(F("Lgt:"));
+    // Row 3: Actuators (Grow Light & Water Pump)
+    display.setCursor(0, 40);
+    display.print(F("Light: "));
     display.print(digitalRead(LED_PIN) == LOW ? F("ON ") : F("OFF"));
-    display.setCursor(68, 54);
-    display.print(F("Pmp:"));
+
+    display.setCursor(68, 40);
+    display.print(F("Pump: "));
     display.print(digitalRead(PUMP_PIN) == LOW ? F("RUN") : F("IDL"));
 
+    // Row 4: Fans
+    display.setCursor(0, 52);
+    display.print(F("Fan:   "));
+    display.print(digitalRead(FAN_PIN) == LOW ? F("ON ") : F("OFF"));
+
+    display.setCursor(68, 52);
+    display.print(F("Extr: "));
+    display.print(digitalRead(EXTRACTOR_PIN) == LOW ? F("ON ") : F("OFF"));
+
   } else {
-    // ================= SCREEN PAGE 2: ESP32 MAC & NETWORK INFO =================
+    // ================= SCREEN 2: ESP32 NETWORK & MAC ADDRESS =================
     // Header Banner
-    display.setTextSize(1);
-    display.setCursor(8, 0);
-    display.print(F("ESP32 NETWORK INFO"));
+    display.setCursor(16, 0);
+    display.print(F("[ SYSTEM INFO ]"));
     display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
 
-    // MAC Address Title & Formatted String
+    // Section 1: MAC Address Title & Centered String
     display.setCursor(0, 13);
     display.print(F("MAC Address:"));
-    display.setCursor(0, 23);
+
+    display.setCursor(13, 24);
     display.print(macAddressStr);
 
-    display.drawLine(0, 33, 127, 33, SSD1306_WHITE);
+    display.drawLine(0, 35, 127, 35, SSD1306_WHITE);
 
-    // SoftAP SSID & Connection Status
-    display.setCursor(0, 36);
+    // Section 2: WiFi SoftAP & Static IP
+    display.setCursor(0, 40);
     display.print(F("AP: "));
     display.print(ssid);
     display.print(apCreated ? F(" [OK]") : F(" [ERR]"));
 
-    // Static IP Address & Web Server Port
-    display.setCursor(0, 46);
-    display.print(F("IP: 192.168.8.14"));
-
-    display.setCursor(0, 56);
-    display.print(F("API: Port 80 (REST)"));
+    display.setCursor(0, 52);
+    display.print(F("IP: 192.168.8.14:80"));
   }
 
   display.display();
-
-  // Swap to the other screen for the next 3-second refresh cycle
-  oledScreenPage = (oledScreenPage == 0) ? 1 : 0;
 }
 
 // ================= GROW LIGHT & PUMP TIMERS =================
