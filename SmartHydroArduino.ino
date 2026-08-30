@@ -149,15 +149,17 @@ struct RequestBuffer {
 } buf;
 
 // ================= PIN ASSIGNMENTS (ESP32 DevKit V1) =================
-// Analog Inputs (Dedicated ADC1 channels - unaffected by Wi-Fi activity)
+// Analog Sensor Inputs (Dedicated ADC1 channels - unaffected by Wi-Fi activity)
 #define LIGHT_PIN     32       // ADC1_CH4 (LDR Ambient Light Sensor)
 #define EC_PIN        34       // ADC1_CH6 (Analog TDS Probe - Input Only)
 #define PH_PIN        35       // ADC1_CH7 (Analog pH Probe - Input Only)
+#define WATER_PIN     36       // ADC1_CH0 / SENSOR_VP (Resistive Water Level Sensor - Input Only)
+#define WATER_THRESHOLD_HIGH 350 // Calibrated 12-bit ADC threshold for Normal status (~0.28V)
+#define WATER_THRESHOLD_LOW  200 // Calibrated 12-bit ADC threshold for Low status (~0.16V)
 
 // Digital Sensor Pins
 #define DHTTYPE DHT11
 #define DHT_PIN       27       // Digital GPIO 27 for DHT11 data bus
-#define WATER_PIN     14       // Digital GPIO 14 for Resistive Water Level Sensor (S pin)
 
 // 230V Appliance Relays (Active LOW: LOW = Relay Energized / ON, HIGH = OFF)
 #define LED_PIN       16       // 230V Relay IN1 — Grow Light
@@ -359,7 +361,7 @@ void setup() {
   // Configure ESP32 ADC for 12-bit resolution (0 to 4095)
   analogReadResolution(12);
 
-  // Configure Resistive Water Level Sensor on GPIO 14
+  // Configure Resistive Water Level Sensor on GPIO 36 (ADC1_CH0 / SENSOR_VP)
   pinMode(WATER_PIN, INPUT);
 
   // Safe Relay Initialization (Active-LOW: Set HIGH before OUTPUT to prevent startup relay clicks)
@@ -383,6 +385,10 @@ void setup() {
   lightLevel = getLightLevel();
   ecLevel = getEC();
   phLevel = getPH();
+
+  // Perform initial startup ML evaluation & dosing if required (prevents 16-hour startup delay)
+  estimateEC();
+  estimatePH();
 
   // Initial OLED dashboard refresh
   updateOLEDDisplay();
@@ -423,11 +429,11 @@ void loop() {
     ecLevel    = getEC();       // TDS sensor → mS/cm conversion
     phLevel    = getPH();
 
-    // Read Resistive Water Level Sensor (HIGH = Submerged in water, LOW = Dry / Below sensor)
-    int waterRead = digitalRead(WATER_PIN);
-    if (waterRead == HIGH) {
+    // Read Resistive Water Level Sensor (Oversampled 12-bit ADC reading with dual-threshold hysteresis)
+    int waterADC = analogReadAvg(WATER_PIN, 10);
+    if (waterADC >= WATER_THRESHOLD_HIGH) {
       waterStatus = "Normal";
-    } else {
+    } else if (waterADC < WATER_THRESHOLD_LOW) {
       waterStatus = "Low";
     }
 
@@ -435,7 +441,8 @@ void loop() {
     Serial.print(F("[Telemetry] Temp: ")); Serial.print(temperature, 1); Serial.print(F(" C | Hum: ")); Serial.print(humidity, 0);
     Serial.print(F(" % | Light ADC: ")); Serial.print((int)lightLevel);
     Serial.print(F(" | EC: ")); Serial.print(ecLevel, 2); Serial.print(F(" mS/cm | pH: ")); Serial.print(phLevel, 2);
-    Serial.print(F(" | Water: ")); Serial.println(waterStatus);
+    Serial.print(F(" | Water: ")); Serial.print(waterStatus);
+    Serial.print(F(" (ADC: ")); Serial.print(waterADC); Serial.println(F(")"));
 
     // Refresh live OLED dashboard numbers
     updateOLEDDisplay();
@@ -483,43 +490,72 @@ void loop() {
         if (buf.endsWith("/extract")) togglePin(EXTRACTOR_PIN);
         if (buf.endsWith("/pump")) togglePin(PUMP_PIN);
 
-        // Peristaltic Dosing Pump Manual Triggers (5-second safety pulse)
-        if (buf.endsWith("/phUp")) {
-          togglePin(PH_DOWN_PIN, HIGH);
-          togglePin(PH_UP_PIN, LOW);
+        // Peristaltic Dosing Pump Manual Triggers (Active-LOW: LOW = Relay ON, HIGH = OFF)
+        if (buf.endsWith("/phUp") || buf.endsWith("/phup") || buf.endsWith("/ph_up")) {
+          digitalWrite(PH_DOWN_PIN, HIGH);
+          digitalWrite(PH_UP_PIN, LOW);
+          Serial.println(F("[Manual] pH Up Pump triggered ON (pulse)"));
           timer.in(PUMP_INTERVAL, disablePH);
         }
-
-        if (buf.endsWith("/phDown")) {
-          togglePin(PH_UP_PIN, HIGH);
-          togglePin(PH_DOWN_PIN, LOW);
+        else if (buf.endsWith("/phDown") || buf.endsWith("/phdown") || buf.endsWith("/ph_down")) {
+          digitalWrite(PH_UP_PIN, HIGH);
+          digitalWrite(PH_DOWN_PIN, LOW);
+          Serial.println(F("[Manual] pH Down Pump triggered ON (pulse)"));
           timer.in(PUMP_INTERVAL, disablePH);
         }
-
-        if (buf.endsWith("/ecUp")) {
-          togglePin(EC_DOWN_PIN, HIGH);
-          togglePin(EC_UP_PIN, LOW);
-          timer.in(PUMP_INTERVAL, disableEC);
+        else if (buf.endsWith("/phOff") || buf.endsWith("/phoff") || buf.endsWith("/ph_off") || buf.endsWith("/phStop")) {
+          disablePH();
+        }
+        else if (buf.endsWith("/ph") || buf.endsWith("/PHPump")) {
+          // Toggle pH Pump or turn off if currently active
+          if (digitalRead(PH_UP_PIN) == HIGH && digitalRead(PH_DOWN_PIN) == HIGH) {
+            digitalWrite(PH_DOWN_PIN, HIGH);
+            digitalWrite(PH_UP_PIN, LOW);
+            Serial.println(F("[Manual] pH Up Pump toggled ON (pulse)"));
+            timer.in(PUMP_INTERVAL, disablePH);
+          } else {
+            disablePH();
+          }
         }
 
-        if (buf.endsWith("/ecDown")) {
-          togglePin(EC_UP_PIN, HIGH);
-          togglePin(EC_DOWN_PIN, LOW);
+        if (buf.endsWith("/ecUp") || buf.endsWith("/ecup") || buf.endsWith("/ec_up") || buf.endsWith("/ec/up")) {
+          digitalWrite(EC_DOWN_PIN, HIGH);
+          digitalWrite(EC_UP_PIN, LOW);
+          Serial.println(F("[Manual] EC Up (Nutrient) Pump triggered ON (pulse)"));
           timer.in(PUMP_INTERVAL, disableEC);
         }
-
-        if (buf.endsWith("/ph")) disablePH();
-        if (buf.endsWith("/ec")) disableEC();
+        else if (buf.endsWith("/ecDown") || buf.endsWith("/ecdown") || buf.endsWith("/ec_down") || buf.endsWith("/ec/down")) {
+          digitalWrite(EC_UP_PIN, HIGH);
+          digitalWrite(EC_DOWN_PIN, LOW);
+          Serial.println(F("[Manual] EC Down (Dilution) Pump triggered ON (pulse)"));
+          timer.in(PUMP_INTERVAL, disableEC);
+        }
+        else if (buf.endsWith("/ecOff") || buf.endsWith("/ecoff") || buf.endsWith("/ec_off") || buf.endsWith("/ecStop")) {
+          disableEC();
+        }
+        else if (buf.endsWith("/ec") || buf.endsWith("/ECPump")) {
+          // Toggle EC Pump or turn off if currently active
+          if (digitalRead(EC_UP_PIN) == HIGH && digitalRead(EC_DOWN_PIN) == HIGH) {
+            digitalWrite(EC_DOWN_PIN, HIGH);
+            digitalWrite(EC_UP_PIN, LOW);
+            Serial.println(F("[Manual] EC Nutrient Pump toggled ON (pulse)"));
+            timer.in(PUMP_INTERVAL, disableEC);
+          } else {
+            disableEC();
+          }
+        }
 
         if (buf.endsWith("/components")) {
           // digitalRead returns HIGH (1 = Relay OFF) or LOW (0 = Relay ON) for Active-LOW relays.
           // Inverted with '!' so 1 = ON, 0 = OFF in the JSON API response for intuitive client parsing.
           message =
             "{\n  \"PHPump\": \"" + String(!digitalRead(PH_UP_PIN)) +
+            "\",\n  \"PHDownPump\": \"" + String(!digitalRead(PH_DOWN_PIN)) +
             "\",\n  \"Light\": \"" + String(!digitalRead(LED_PIN)) +
             "\",\n  \"ECPump\": \"" + String(!digitalRead(EC_UP_PIN)) +
+            "\",\n  \"ECDownPump\": \"" + String(!digitalRead(EC_DOWN_PIN)) +
             "\",\n  \"WaterPump\": \"" + String(!digitalRead(PUMP_PIN)) +
-            "\",\n  \"Exctractor\": \"" + String(!digitalRead(EXTRACTOR_PIN)) +
+            "\",\n  \"Extractor\": \"" + String(!digitalRead(EXTRACTOR_PIN)) +
             "\",\n  \"Fan\": \"" + String(!digitalRead(FAN_PIN)) +
             "\",\n  \"Water\": \"" + waterStatus +
             "\"\n}";
@@ -915,20 +951,19 @@ void setPump(int result, int pinUp, int pinDown, int statusUp, int statusDown) {
 
   if (result == 1) { 
     // Below target -> Activate UP pump (Nutrient Up or pH Up)
-    if (statusUp == HIGH || statusDown == LOW) {
-      digitalWrite(pinUp, LOW);   // Turn ON UP pump (Active LOW)
-      digitalWrite(pinDown, HIGH);// Ensure DOWN pump is OFF
-    }
+    digitalWrite(pinDown, HIGH);// Interlock: Ensure DOWN pump is OFF first
+    digitalWrite(pinUp, LOW);   // Turn ON UP pump (Active LOW)
+    Serial.println(F("[Dosing Actuator] ML Class 1 (LOW) -> UP Pump Energized (LOW)"));
   } else if (result == 0) { 
     // Above target -> Activate DOWN pump (Dilution or pH Down)
-    if (statusUp == LOW || statusDown == HIGH) {
-      digitalWrite(pinUp, HIGH);  // Ensure UP pump is OFF
-      digitalWrite(pinDown, LOW); // Turn ON DOWN pump (Active LOW)
-    }
+    digitalWrite(pinUp, HIGH);  // Interlock: Ensure UP pump is OFF first
+    digitalWrite(pinDown, LOW); // Turn ON DOWN pump (Active LOW)
+    Serial.println(F("[Dosing Actuator] ML Class 0 (HIGH) -> DOWN Pump Energized (LOW)"));
   } else { 
     // Optimal (result == 2) -> Both pumps OFF
     digitalWrite(pinUp, HIGH);
     digitalWrite(pinDown, HIGH);
+    Serial.println(F("[Dosing Actuator] ML Class 2 (OPTIMAL) -> Both Pumps Inactive (HIGH)"));
   }
 }
 
@@ -957,7 +992,9 @@ bool estimatePH(void *argument) {
     int phUpStatus = digitalRead(PH_UP_PIN);
     int phDownStatus = digitalRead(PH_DOWN_PIN);
     setPump(result, PH_UP_PIN, PH_DOWN_PIN, phUpStatus, phDownStatus);
-    timer.in(PUMP_INTERVAL, disablePH); // Automatically turn off dosing pump after 5-second pulse
+    if (result == 0 || result == 1) {
+      timer.in(PUMP_INTERVAL, disablePH); // Automatically turn off dosing pump after 7-second pulse
+    }
   }
   return true; // Repeat timer
 }
@@ -968,7 +1005,9 @@ bool estimateEC(void *argument) {
     int ecUpStatus = digitalRead(EC_UP_PIN);
     int ecDownStatus = digitalRead(EC_DOWN_PIN);
     setPump(result, EC_UP_PIN, EC_DOWN_PIN, ecUpStatus, ecDownStatus);
-    timer.in(PUMP_INTERVAL, disableEC); // Automatically turn off dosing pump after 5-second pulse
+    if (result == 0 || result == 1) {
+      timer.in(PUMP_INTERVAL, disableEC); // Automatically turn off dosing pump after 7-second pulse
+    }
   }
   return true; // Repeat timer
 }
